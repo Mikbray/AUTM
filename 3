@@ -1,0 +1,392 @@
+local SOURCE
+SOURCE = [==[
+local SOURCE = %q
+local QUEUED_SOURCE = string.format(SOURCE, SOURCE)
+
+_G.Auto = true
+
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local UIS = game:GetService("UserInputService")
+local CAS = game:GetService("ContextActionService")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local StarterGui = game:GetService("StarterGui")
+
+local localPlr = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local busy = false
+local hidingEscMenu = false
+local characterReady = false
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local menuRejoinReady = not isMobile
+local mobileMenuArmed = not isMobile
+local sharedState = type(getgenv) == "function" and getgenv() or _G
+sharedState.AutoRejoinLastAt = sharedState.AutoRejoinLastAt or -math.huge
+
+local qot = queue_on_teleport or syn and syn.queue_on_teleport
+
+local keys = {
+    [Enum.KeyCode.Escape] = true,
+    [Enum.KeyCode.L] = true,
+    [Enum.KeyCode.Return] = true,
+    [Enum.KeyCode.KeypadEnter] = true,
+    [Enum.KeyCode.LeftAlt] = true,
+    [Enum.KeyCode.RightAlt] = true,
+    [Enum.KeyCode.F4] = true,
+}
+
+local menuNames = {
+    SettingsShield = true,
+    SettingsHub = true,
+    SettingsHubDisplay = true,
+    InGameMenu = true,
+    ExperienceMenu = true,
+    RobloxMenu = true,
+    MenuContainer = true,
+    PageViewClipper = true,
+    HubBar = true,
+    TopBarApp = true,
+    TopbarApp = true,
+    Chrome = true,
+    ChromeContainer = true,
+    LeaveGamePage = true,
+    ReportAbusePage = true,
+    PeoplePage = true,
+    SettingsPage = true,
+    ControlsPage = true,
+    RespawnPage = true,
+}
+
+local rejoinMenuNames = {
+    SettingsHub = true,
+    SettingsHubDisplay = true,
+    InGameMenu = true,
+    ExperienceMenu = true,
+    RobloxMenu = true,
+    MenuContainer = true,
+    PageViewClipper = true,
+    LeaveGamePage = true,
+    ReportAbusePage = true,
+    PeoplePage = true,
+    SettingsPage = true,
+    ControlsPage = true,
+    RespawnPage = true,
+}
+
+local function refreshCharacterReady(character)
+    characterReady = false
+    menuRejoinReady = not isMobile
+    mobileMenuArmed = not isMobile
+
+    if not character then
+        return
+    end
+
+    task.spawn(function()
+        if not game:IsLoaded() then
+            game.Loaded:Wait()
+        end
+
+        local hrp = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 10)
+        if hrp and localPlr.Character == character then
+            characterReady = true
+
+            if isMobile then
+                localPlr:WaitForChild("PlayerGui", 10)
+                task.wait(5)
+
+                if _G.Auto and not busy and localPlr.Character == character and characterReady then
+                    menuRejoinReady = true
+                end
+            end
+        end
+    end)
+end
+
+refreshCharacterReady(localPlr.Character)
+
+localPlr.CharacterAdded:Connect(function(character)
+    refreshCharacterReady(character)
+end)
+
+localPlr.CharacterRemoving:Connect(function()
+    characterReady = false
+    menuRejoinReady = not isMobile
+    mobileMenuArmed = not isMobile
+end)
+
+local function canRejoin()
+    return _G.Auto and characterReady and not busy and os.clock() - sharedState.AutoRejoinLastAt >= 4
+end
+
+local function queueSelf()
+    if qot then
+        qot(QUEUED_SOURCE)
+    end
+end
+
+local function hideTopbar()
+    task.spawn(function()
+        while _G.Auto and not busy do
+            pcall(function()
+                StarterGui:SetCore("TopbarEnabled", false)
+            end)
+
+            task.wait(1)
+        end
+    end)
+end
+
+local function tryRejoin()
+    if not canRejoin() then
+        return
+    end
+
+    sharedState.AutoRejoinLastAt = os.clock()
+    busy = true
+    queueSelf()
+
+    local placeId = game.PlaceId
+    local jobId = game.JobId
+
+    if #Players:GetPlayers() <= 1 then
+        pcall(localPlr.Kick, localPlr, "\nRejoining...")
+        TeleportService:Teleport(placeId, localPlr)
+    else
+        TeleportService:TeleportToPlaceInstance(placeId, jobId, localPlr)
+    end
+end
+
+local function hideObj(obj)
+    if not obj then
+        return
+    end
+
+    if obj:IsA("ScreenGui") then
+        pcall(function()
+            obj.Enabled = false
+        end)
+    elseif obj:IsA("GuiObject") then
+        pcall(function()
+            obj.Visible = false
+        end)
+    end
+
+    for _, desc in ipairs(obj:GetDescendants()) do
+        if desc:IsA("ScreenGui") then
+            pcall(function()
+                desc.Enabled = false
+            end)
+        elseif desc:IsA("GuiObject") then
+            pcall(function()
+                desc.Visible = false
+            end)
+        end
+    end
+end
+
+local function hideKnownMenus(robloxGui)
+    if not robloxGui then return end
+
+    for name in pairs(menuNames) do
+        hideObj(robloxGui:FindFirstChild(name, true))
+    end
+end
+
+local function isVisibleGui(obj)
+    if not obj then
+        return false
+    end
+
+    local ok, visible = pcall(function()
+        if obj:IsA("GuiObject") then
+            return obj.Visible and obj.AbsoluteSize.X > 0 and obj.AbsoluteSize.Y > 0
+        end
+
+        if obj:IsA("ScreenGui") and not obj.Enabled then
+            return false
+        end
+
+        for _, desc in ipairs(obj:GetDescendants()) do
+            if desc:IsA("GuiObject") and desc.Visible and desc.AbsoluteSize.X > 0 and desc.AbsoluteSize.Y > 0 then
+                return true
+            end
+        end
+
+        return false
+    end)
+
+    return ok and visible
+end
+
+local function menuTriggered(obj, shouldRejoin)
+    if not obj or not menuNames[obj.Name] then
+        return false
+    end
+
+    if isVisibleGui(obj) then
+        hideObj(obj)
+        if shouldRejoin and menuRejoinReady and rejoinMenuNames[obj.Name] then
+            tryRejoin()
+        end
+
+        return true
+    end
+
+    return false
+end
+
+local function triggerKnownMenus(robloxGui, shouldRejoin)
+    if not robloxGui then return false end
+
+    local triggered = false
+
+    for name in pairs(menuNames) do
+        if menuTriggered(robloxGui:FindFirstChild(name, true), shouldRejoin) then
+            triggered = true
+        end
+    end
+
+    return triggered
+end
+
+local function startEscMenuHideBurst()
+    if hidingEscMenu then return end
+    hidingEscMenu = true
+
+    task.spawn(function()
+        local endAt = os.clock() + 1.25
+
+        while os.clock() < endAt do
+            local robloxGui = CoreGui:FindFirstChild("RobloxGui")
+            hideKnownMenus(robloxGui)
+            RunService.RenderStepped:Wait()
+        end
+
+        hidingEscMenu = false
+    end)
+end
+
+local function startDesktopRejoinWatch()
+    UIS.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Keyboard and keys[input.KeyCode] then
+            if input.KeyCode == Enum.KeyCode.Escape then
+                startEscMenuHideBurst()
+            end
+
+            tryRejoin()
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Keyboard and keys[input.KeyCode] then
+            if input.KeyCode == Enum.KeyCode.Escape then
+                startEscMenuHideBurst()
+            end
+
+            tryRejoin()
+        end
+    end)
+
+    CAS:BindActionAtPriority(
+        "AutoRejoin_AllKeys_Max",
+        function(_, state, input)
+            if input and keys[input.KeyCode] then
+                if input.KeyCode == Enum.KeyCode.Escape then
+                    startEscMenuHideBurst()
+                end
+
+                if state == Enum.UserInputState.Begin or state == Enum.UserInputState.End then
+                    tryRejoin()
+                end
+
+                return Enum.ContextActionResult.Sink
+            end
+
+            return Enum.ContextActionResult.Pass
+        end,
+        false,
+        2147483647,
+        Enum.KeyCode.Escape,
+        Enum.KeyCode.L,
+        Enum.KeyCode.Return,
+        Enum.KeyCode.KeypadEnter,
+        Enum.KeyCode.LeftAlt,
+        Enum.KeyCode.RightAlt,
+        Enum.KeyCode.F4
+    )
+
+    task.spawn(function()
+        while _G.Auto and not busy do
+            if UIS:IsKeyDown(Enum.KeyCode.Escape) then
+                startEscMenuHideBurst()
+                tryRejoin()
+                return
+            end
+
+            if UIS:IsKeyDown(Enum.KeyCode.L)
+                or UIS:IsKeyDown(Enum.KeyCode.Return)
+                or UIS:IsKeyDown(Enum.KeyCode.KeypadEnter)
+                or UIS:IsKeyDown(Enum.KeyCode.LeftAlt)
+                or UIS:IsKeyDown(Enum.KeyCode.RightAlt)
+                or UIS:IsKeyDown(Enum.KeyCode.F4)
+            then
+                tryRejoin()
+                return
+            end
+
+            RunService.RenderStepped:Wait()
+        end
+    end)
+end
+
+local function startMenuHideWatch(shouldRejoin)
+    task.spawn(function()
+        local robloxGui
+        local connected = false
+
+        while _G.Auto and not busy do
+            robloxGui = CoreGui:FindFirstChild("RobloxGui")
+
+            if robloxGui and not connected then
+                connected = true
+
+                robloxGui.DescendantAdded:Connect(function(obj)
+                    task.defer(function()
+                        menuTriggered(obj, shouldRejoin and mobileMenuArmed)
+                    end)
+                end)
+
+                robloxGui.DescendantRemoving:Connect(function(obj)
+                    hideObj(obj)
+                end)
+            end
+
+            local allowRejoin = shouldRejoin and mobileMenuArmed
+            local triggered = triggerKnownMenus(robloxGui, allowRejoin)
+
+            if shouldRejoin and menuRejoinReady and not triggered then
+                mobileMenuArmed = true
+            end
+
+            RunService.RenderStepped:Wait()
+        end
+    end)
+end
+
+if isMobile then
+    startMenuHideWatch(true)
+else
+    startMenuHideWatch(false)
+    startDesktopRejoinWatch()
+end
+
+hideTopbar()
+queueSelf()
+
+while _G.Auto and not busy do
+    RunService.RenderStepped:Wait()
+end
+]==]
+
+loadstring(string.format(SOURCE, SOURCE))()
